@@ -14,6 +14,7 @@ class MercadoLibreController extends Controller
     {
         $data = $request->all();
         Log::debug(["Data notification" => $data]);
+        $new_order = null;
 
         if($data["topic"] == "orders_v2"){
 
@@ -95,12 +96,17 @@ class MercadoLibreController extends Controller
 
     public function new_order($user_id, $resource, $data)
     {
-        $new_order = new Order();
-        $new_order->user_id = $user_id;
-        $new_order->resource = $resource;
-        $new_order->data = $data;
-        $new_order->save();
-
+        $new_order = null;
+        try {
+            $new_order = new Order();
+            $new_order->user_id = $user_id;
+            $new_order->resource = $resource;
+            $new_order->data = $data;
+            $new_order->save();
+            
+        } catch (\Exception $e) {
+            Log::debug(["message" => "Error al registrar venta (funcion principal)", "error" => $e->getMessage(), $e->getLine()]);
+        }
         return $new_order; 
     }
 }
