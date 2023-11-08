@@ -83,8 +83,11 @@ class MercadoLibreController extends Controller
     public function refreshToken($user)
     {
         // Variables de configuración
-        $client_id = "5379601931617009";
-        $client_secret = "HbITNprHGpHFPj7pW5HGrsWjH9X3koKm";
+        // $client_id = "5379601931617009";
+        // $client_secret = "HbITNprHGpHFPj7pW5HGrsWjH9X3koKm";
+        
+        $client_id = $user->client_id;
+        $client_secret = $user->client_secret;
 
         // Endpoint de la solicitud POST
         $url = "https://api.mercadolibre.com/oauth/token";
