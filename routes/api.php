@@ -23,4 +23,6 @@ Route::post('/notification', [MercadoLibreController::class, 'handleWebhook']);
 Route::post('/publication/update/price', [MercadoLibreController::class, 'update_publication_price']);
 Route::post('/publication/update/status', [MercadoLibreController::class, 'update_publication_status']);
 Route::post('/publication/update/stock', [MercadoLibreController::class, 'update_publication_stock']);
+Route::post('/publication/upload/invoice', [MercadoLibreController::class, 'upload_publication_invoice']);
 Route::get('/test_api', [MercadoLibreController::class, 'test_api']);
+Route::get('/test_get_users', [MercadoLibreController::class, 'test_get_users']);

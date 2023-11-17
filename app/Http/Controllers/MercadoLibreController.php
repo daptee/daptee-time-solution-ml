@@ -7,6 +7,8 @@ use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Validation\Rule;
+use Illuminate\Support\Facades\DB;
 
 class MercadoLibreController extends Controller
 {
@@ -150,6 +152,9 @@ class MercadoLibreController extends Controller
             $response = Http::withHeaders(['Authorization' => 'Bearer ' . $user->access_token])
                         ->put($url, ['price' => $request->price]);
     
+            if($response->status() == 404)
+                return response()->json(["message" => "item_id invalido"], 400);
+            
             $data = $response->json();
 
             // return $response->status();
@@ -178,13 +183,13 @@ class MercadoLibreController extends Controller
         $request->validate([
             "item_id" => "required",
             "user_id" => "required|numeric",
-            "status" => "required",
+            "status" => ["required", Rule::in(['active', 'paused'])],
         ]);
 
         $user = User::where("user_id", $request->user_id)->first();
         
         if(!$user)
-            return response()->json(["message" => "Usuario no existente ID invalido"], 500);
+            return response()->json(["message" => "Usuario no existente ID invalido"], 400);
 
         try {
             // Ejecutar endpoint para actualizar valor
@@ -193,6 +198,9 @@ class MercadoLibreController extends Controller
             $response = Http::withHeaders(['Authorization' => 'Bearer ' . $user->access_token])
                         ->put($url, ['status' => $request->status]);
     
+            if($response->status() == 404)
+                return response()->json(["message" => "item_id invalido"], 400);
+
             $data = $response->json();
 
             // Si devuelve 401 ejecutar refresh token en caso contrario seguir y hacer logica 
@@ -220,7 +228,7 @@ class MercadoLibreController extends Controller
         $request->validate([
             "item_id" => "required",
             "user_id" => "required|numeric",
-            "stock" => "required|numeric",
+            "stock" => "required|integer|min:0",
         ]);
 
         $user = User::where("user_id", $request->user_id)->first();
@@ -235,6 +243,9 @@ class MercadoLibreController extends Controller
             $response = Http::withHeaders(['Authorization' => 'Bearer ' . $user->access_token])
                         ->put($url, ['available_quantity' => $request->stock]);
     
+            if($response->status() == 404)
+                return response()->json(["message" => "item_id invalido"], 400);
+            
             $data = $response->json();
 
             // Si devuelve 401 ejecutar refresh token en caso contrario seguir y hacer logica 
@@ -257,8 +268,60 @@ class MercadoLibreController extends Controller
         return response()->json(["message" => "Stock de publicación actualizado exitosamente.", "data" => $data]);
     }
 
+    public function upload_publication_invoice(Request $request)
+    {
+        $request->validate([
+            "order_id" => "required",
+            "user_id" => "required|numeric",
+            "fiscal_document" => "required|mimes:pdf,xml",
+        ], [
+            "fiscal_document.mimes" => "fiscal_document debe ser un archivo PDF o XML.",
+        ]);
+
+        $file = $request->file('fiscal_document');
+
+        $user = User::where("user_id", $request->user_id)->first();
+        
+        if(!$user)
+            return response()->json(["message" => "Usuario no existente ID invalido"], 500);
+
+        try {
+            $url = "https://api.mercadolibre.com/packs/" . $request->order_id . "/fiscal_documents";
+            
+            $response = Http::withHeaders(['Authorization' => 'Bearer ' . $user->access_token])
+                ->attach('fiscal_document', file_get_contents($file), 'fiscal_document.pdf')->post($url);
+
+            if($response->status() == 404)
+                return response()->json(["message" => "order_id invalido"], 400);
+            
+            $data = $response->json();
+
+            // Si devuelve 401 ejecutar refresh token en caso contrario seguir y hacer logica 
+            if($response->status() == 401){
+                $new_token = $this->refreshToken($user);
+                $response = Http::withHeaders(['Authorization' => 'Bearer ' . $new_token])
+                        ->attach('fiscal_document', file_get_contents($file), 'fiscal_document.pdf')->post($url); 
+
+                $data = $response->json();
+            }
+
+        } catch (\Exception $e) {
+            Log::debug(["message" => "Error al cargar factura en publicación", "error" => $e->getMessage(), $e->getLine()]);
+            return response()->json(["message" => "Error al cargar factura en publicación", "error" => $e->getMessage(), "line" => $e->getLine()], 500);
+        }
+
+        return response()->json(["message" => "Carga de factura en publicación exitosamente.", "data" => $data]);
+    }
+
     public function test_api()
     {
         dd("Test api correcto");
+    }
+
+    public function test_get_users()
+    {
+        $users = User::all();
+
+        return response()->json(["users" => $users]); 
     }
 }
