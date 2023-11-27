@@ -163,7 +163,7 @@ class MercadoLibreController extends Controller
             $new_order->order_date = $data['date_created'];
             $new_order->payment_type = $data['payments'][0]['payment_type'];
             $new_order->status = $data['status'];
-            $new_order->company_name = $data['buyer']['first_name'] . ' ' . $data['buyer']['last_name'];
+            $new_order->name = $data['buyer']['first_name'] . ' ' . $data['buyer']['last_name'];
             $new_order->save();
 
             $new_order_detail = new OrderDetail();
