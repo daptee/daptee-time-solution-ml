@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Order;
+use App\Models\OrderDetail;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
@@ -15,9 +16,7 @@ class MercadoLibreController extends Controller
     public function handleWebhook(Request $request)
     {
         $data = $request->all();
-        Log::debug(["Data notification" => $data]);
         $new_order = null;
-
         if($data["topic"] == "orders_v2"){
 
             $user_id = $data["user_id"];
@@ -26,7 +25,6 @@ class MercadoLibreController extends Controller
             $user = User::where("user_id", $user_id)->first();
 
             if(!$order){
-
                 if($user){
                     try {
                         $url = "https://api.mercadolibre.com" . $resource; // /orders/2000006733067046";
@@ -41,18 +39,26 @@ class MercadoLibreController extends Controller
                             $data = $response->json();
                         }
 
-                        $new_order = $this->new_order($user_id, $resource, $data);
-                    
+                        if($data['status'] == "cancelled"){
+                            $delete_order = $this->delete_order($user_id, $resource);
+                        }else{
+                            $new_order = $this->new_order($user_id, $resource, $data);
+                        }
+                        // if($new_order['status'] != 200){
+                        //     return response()->json(["message" => "Error al registrar el pedido"], 400);
+                        // }
+
                     } catch (\Exception $e) {
                         Log::debug(["message" => "Error al registrar pedido", "error" => $e->getMessage(), $e->getLine()]);
                         return response()->json(["message" => "Error al registrar pedido", "error" => $e->getMessage(), "line" => $e->getLine()], 500);
                     }
                 }
+                
+                $this->clean_records_orders($resource);
 
                 return response()->json(["message" => "Pedido guardado exitosamente.", "order" => $new_order]);
 
             }else{
-
                 if($user){
                     try {
                         $url = "https://api.mercadolibre.com" . $resource; // /orders/2000006733067046";
@@ -67,19 +73,46 @@ class MercadoLibreController extends Controller
                             $data = $response->json();
                         }
 
-                        $order->data = $data;
-                        $order->save();
-                    
+                        // status negativo eliminar
+                        if($data['status'] == "cancelled"){
+                            $delete_order = $this->delete_order($user_id, $resource);
+                        }else{
+                            $order->data = $data;
+                            $order->save();
+
+                            $order_detail = OrderDetail::where('order_id', $order->id)->first();
+                            $order_detail->publication_id = $data['order_items'][0]['item']['id'];
+                            $order_detail->title = $data['order_items'][0]['item']['title'];
+                            $order_detail->category_id = $data['order_items'][0]['item']['category_id'];
+                            $order_detail->quantity = $data['order_items'][0]['quantity'];
+                            $order_detail->unit_price = $data['order_items'][0]['unit_price'];
+                            $order_detail->save();
+                        }
+
                     } catch (\Exception $e) {
                         Log::debug(["message" => "Error al actualizar pedido", "error" => $e->getMessage(), $e->getLine()]);
                         return response()->json(["message" => "Error al actualizar pedido ", "error" => $e->getMessage(), "line" => $e->getLine()], 500);
                     }
                 }
+                
+                $this->clean_records_orders($resource);
 
                 return response()->json(["message" => "Pedido actulizado exitosamente.", "order" => $order]);
             }
         }
         
+    }
+
+    public function delete_order($user_id, $resource)
+    {
+        $orders = Order::where("user_id", $user_id)->where("resource", $resource);
+        foreach ($orders as $order) {
+            $order_details = OrderDetail::where('order_id', $order->id)->get();
+            foreach($order_details as $order_detail){
+                $order_detail->delete();
+            }
+            $order->delete();
+        }
     }
 
     public function refreshToken($user)
@@ -120,17 +153,65 @@ class MercadoLibreController extends Controller
     {
         $new_order = null;
         try {
+            DB::beginTransaction();
+
             $new_order = new Order();
             $new_order->user_id = $user_id;
             $new_order->resource = $resource;
             $new_order->data = $data;
+            $new_order->order_id = $data['id'];
+            $new_order->order_date = $data['date_created'];
+            $new_order->payment_type = $data['payments'][0]['payment_type'];
+            $new_order->status = $data['status'];
+            $new_order->company_name = $data['buyer']['first_name'] . ' ' . $data['buyer']['last_name'];
             $new_order->save();
+
+            $new_order_detail = new OrderDetail();
+            $new_order_detail->order_id = $new_order->id;
+            $new_order_detail->publication_id = $data['order_items'][0]['item']['id'];
+            $new_order_detail->title = $data['order_items'][0]['item']['title'];
+            $new_order_detail->category_id = $data['order_items'][0]['item']['category_id'];
+            $new_order_detail->quantity = $data['order_items'][0]['quantity'];
+            $new_order_detail->unit_price = $data['order_items'][0]['unit_price'];
+            $new_order_detail->save();
+
+            DB::commit();
             
         } catch (\Exception $e) {
+            DB::rollBack();
             Log::debug(["message" => "Error al registrar venta (funcion principal)", "error" => $e->getMessage(), $e->getLine()]);
+            return ['error'=>"Error al registrar venta (funcion principal)", 'status'=>500];
+            // Chequear con Seba mensaje
         }
-        return $new_order; 
+        return ['order' => $new_order, 'status'=> 200];
     }
+
+    public function clean_records_orders($resource)
+    {
+        $orders = Order::where("resource", $resource)->orderBy('id', 'DESC')->get();
+
+        if ($orders->count() > 1) {
+            $firstOrder = $orders->first();
+            
+            for ($i = 1; $i < $orders->count(); $i++) {
+                if ($this->areOrdersEqual($firstOrder, $orders[$i])) {
+                    // Elimina el registro si es igual al primero
+                    $OrderDetail = OrderDetail::where('order_id', $orders[$i]->id)->first();
+                    $orders[$i]->delete();
+                    $OrderDetail->delete();
+                }
+            }
+        }
+
+        return $orders;
+    }
+
+    private function areOrdersEqual($order1, $order2)
+    {
+        // Compara los atributos para determinar si los registros son iguales
+        return $order1->user_id == $order2->user_id && $order1->data == $order2->data;
+    }
+
 
     public function update_publication_price(Request $request)
     {
@@ -143,7 +224,7 @@ class MercadoLibreController extends Controller
         $user = User::where("user_id", $request->user_id)->first();
         
         if(!$user)
-            return response()->json(["message" => "Usuario no existente ID invalido"], 500);
+            return response()->json(["message" => "Usuario no existente ID invalido"], 400);
 
         try {
             // Ejecutar endpoint para actualizar valor
@@ -183,8 +264,9 @@ class MercadoLibreController extends Controller
         $request->validate([
             "item_id" => "required",
             "user_id" => "required|numeric",
-            "status" => ["required", Rule::in(['active', 'paused'])],
+            "status" => ["required", Rule::in(['active', 'paused', 'closed'])],
         ]);
+        //Agregar estado 'closed'
 
         $user = User::where("user_id", $request->user_id)->first();
         
@@ -213,7 +295,6 @@ class MercadoLibreController extends Controller
             }
 
             // No guardamos en ningun lado ese cambio de estado o algo por el estilo? CHEQUEAR CON SEBA
-            // $new_order = $this->new_order($user_id, $resource, $data);
         
         } catch (\Exception $e) {
             Log::debug(["message" => "Error al actualizar estado de publicación", "error" => $e->getMessage(), $e->getLine()]);
@@ -234,7 +315,7 @@ class MercadoLibreController extends Controller
         $user = User::where("user_id", $request->user_id)->first();
         
         if(!$user)
-            return response()->json(["message" => "Usuario no existente ID invalido"], 500);
+            return response()->json(["message" => "Usuario no existente ID invalido"], 400);
 
         try {
             // Ejecutar endpoint para actualizar valor
@@ -283,7 +364,7 @@ class MercadoLibreController extends Controller
         $user = User::where("user_id", $request->user_id)->first();
         
         if(!$user)
-            return response()->json(["message" => "Usuario no existente ID invalido"], 500);
+            return response()->json(["message" => "Usuario no existente ID invalido"], 400);
 
         try {
             $url = "https://api.mercadolibre.com/packs/" . $request->order_id . "/fiscal_documents";
