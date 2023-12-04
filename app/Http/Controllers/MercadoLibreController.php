@@ -24,82 +24,55 @@ class MercadoLibreController extends Controller
             $order = Order::where("resource", $resource)->first();
             $user = User::where("user_id", $user_id)->first();
 
-            if(!$order){
-                if($user){
-                    try {
-                        $url = "https://api.mercadolibre.com" . $resource; // /orders/2000006733067046";
-                        
-                        $response = Http::withHeaders([ 'Authorization' => 'Bearer ' . $user->access_token ])->get($url);
-                
-                        $data = $response->json();
+            if($user){
+                try {
+                    $url = "https://api.mercadolibre.com" . $resource; // /orders/2000006733067046";
+                    
+                    $access_token = $user->access_token;
+                    $response = Http::withHeaders([ 'Authorization' => 'Bearer ' . $access_token ])->get($url);
+            
+                    $response_json = $response->json();
 
-                        if($response->status() == 401){
-                            $new_token = $this->refreshToken($user);
-                            $response = Http::withHeaders(['Authorization' => 'Bearer ' . $new_token])->get($url);   
-                            $data = $response->json();
-                        }
-
-                        if($data['status'] == "cancelled"){
-                            $delete_order = $this->delete_order($user_id, $resource);
-                        }else{
-                            $new_order = $this->new_order($user_id, $resource, $data);
-                        }
-                        // if($new_order['status'] != 200){
-                        //     return response()->json(["message" => "Error al registrar el pedido"], 400);
-                        // }
-
-                    } catch (\Exception $e) {
-                        Log::debug(["message" => "Error al registrar pedido", "error" => $e->getMessage(), $e->getLine()]);
-                        return response()->json(["message" => "Error al registrar pedido", "error" => $e->getMessage(), "line" => $e->getLine()], 500);
+                    if($response->status() == 401){
+                        $access_token = $this->refreshToken($user);
+                        $response = Http::withHeaders(['Authorization' => 'Bearer ' . $access_token])->get($url);   
+                        $response_json = $response->json();
                     }
-                }
-                
-                $this->clean_records_orders($resource);
 
-                return response()->json(["message" => "Pedido guardado exitosamente.", "order" => $new_order]);
-
-            }else{
-                if($user){
-                    try {
-                        $url = "https://api.mercadolibre.com" . $resource; // /orders/2000006733067046";
-                        
-                        $response = Http::withHeaders([ 'Authorization' => 'Bearer ' . $user->access_token ])->get($url);
-                
-                        $data = $response->json();
-
-                        if($response->status() == 401){
-                            $new_token = $this->refreshToken($user);
-                            $response = Http::withHeaders(['Authorization' => 'Bearer ' . $new_token])->get($url);   
-                            $data = $response->json();
-                        }
-
-                        // status negativo eliminar
-                        if($data['status'] == "cancelled"){
-                            $delete_order = $this->delete_order($user_id, $resource);
-                        }else{
-                            $order->data = $data;
-                            $order->save();
-
-                            $order_detail = OrderDetail::where('order_id', $order->id)->first();
-                            $order_detail->publication_id = $data['order_items'][0]['item']['id'];
-                            $order_detail->title = $data['order_items'][0]['item']['title'];
-                            $order_detail->category_id = $data['order_items'][0]['item']['category_id'];
-                            $order_detail->quantity = $data['order_items'][0]['quantity'];
-                            $order_detail->unit_price = $data['order_items'][0]['unit_price'];
-                            $order_detail->save();
-                        }
-
-                    } catch (\Exception $e) {
-                        Log::debug(["message" => "Error al actualizar pedido", "error" => $e->getMessage(), $e->getLine()]);
-                        return response()->json(["message" => "Error al actualizar pedido ", "error" => $e->getMessage(), "line" => $e->getLine()], 500);
+                    if($response_json['status'] == "cancelled"){
+                        $this->delete_order($user_id, $resource);
                     }
-                }
-                
-                $this->clean_records_orders($resource);
 
-                return response()->json(["message" => "Pedido actulizado exitosamente.", "order" => $order]);
+                    $url_bi = "$url/billing_info";
+                    $response_billing_info = Http::withHeaders(['Authorization' => 'Bearer ' . $access_token])->get($url_bi);   
+                    
+                    $billing_info = $response_billing_info->json();
+                    if(!$order){
+                        if($response_json['status'] != "cancelled"){
+                            $new_order = $this->new_order($user_id, $resource, $response_json, $billing_info);
+                        }
+                    }else{
+                        $order->data = $response_json;
+                        $order->save();
+
+                        $order_detail = OrderDetail::where('order_id', $order->id)->first();
+                        $order_detail->publication_id = $response_json['order_items'][0]['item']['id'];
+                        $order_detail->title = $response_json['order_items'][0]['item']['title'];
+                        $order_detail->category_id = $response_json['order_items'][0]['item']['category_id'];
+                        $order_detail->quantity = $response_json['order_items'][0]['quantity'];
+                        $order_detail->unit_price = $response_json['order_items'][0]['unit_price'];
+                        $order_detail->save();
+                    }
+
+                    $this->clean_records_orders($resource);
+
+                } catch (\Exception $e) {
+                    Log::debug(["message" => "Error al registrar pedido", "error" => $e->getMessage(), $e->getLine()]);
+                    return response()->json(["message" => "Error al registrar pedido", "error" => $e->getMessage(), "line" => $e->getLine()], 500);
+                }
             }
         }
+        return response()->json(["message" => "Pedido guardado exitosamente.", "order" => $new_order]);
         
     }
 
@@ -149,7 +122,7 @@ class MercadoLibreController extends Controller
         }
     }
 
-    public function new_order($user_id, $resource, $data)
+    public function new_order($user_id, $resource, $data, $billing_info)
     {
         $new_order = null;
         try {
@@ -164,6 +137,9 @@ class MercadoLibreController extends Controller
             $new_order->payment_type = $data['payments'][0]['payment_type'];
             $new_order->status = $data['status'];
             $new_order->name = $data['buyer']['first_name'] . ' ' . $data['buyer']['last_name'];
+            $new_order->document_type = $billing_info['billing_info']['doc_type'] ?? null;
+            $new_order->document = $billing_info['billing_info']['doc_number'] ?? null;
+            $new_order->billing_info = $billing_info ?? null;
             $new_order->save();
 
             $new_order_detail = new OrderDetail();
@@ -248,8 +224,6 @@ class MercadoLibreController extends Controller
                 $data = $response->json();
             }
 
-            // No guardamos en ningun lado ese cambio de precio o algo por el estilo? CHEQUEAR CON SEBA
-            // $new_order = $this->new_order($user_id, $resource, $data);
         
         } catch (\Exception $e) {
             Log::debug(["message" => "Error al actualizar precio de publicación", "error" => $e->getMessage(), $e->getLine()]);

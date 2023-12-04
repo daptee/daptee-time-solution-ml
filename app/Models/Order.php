@@ -11,5 +11,6 @@ class Order extends Model
 
     protected $casts = [
         'data' => 'json',
+        'billing_info' => 'json',
     ];
 }
