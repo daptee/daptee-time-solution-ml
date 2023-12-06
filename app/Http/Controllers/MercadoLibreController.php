@@ -48,9 +48,9 @@ class MercadoLibreController extends Controller
                     
                     $billing_info = $response_billing_info->json();
                     if(!$order){
-                        if($response_json['status'] != "cancelled"){
+                        // if($response_json['status'] != "cancelled"){
                             $new_order = $this->new_order($user_id, $resource, $response_json, $billing_info);
-                        }
+                        // }
                     }else{
                         $order->data = $response_json;
                         $order->save();
@@ -64,7 +64,7 @@ class MercadoLibreController extends Controller
                         $order_detail->save();
                     }
 
-                    $this->clean_records_orders($resource);
+                    // $this->clean_records_orders($resource);
 
                 } catch (\Exception $e) {
                     Log::debug(["message" => "Error al registrar pedido", "error" => $e->getMessage(), $e->getLine()]);
