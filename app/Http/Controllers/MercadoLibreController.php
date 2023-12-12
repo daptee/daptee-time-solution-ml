@@ -16,6 +16,7 @@ class MercadoLibreController extends Controller
     public function handleWebhook(Request $request)
     {
         $data = $request->all();
+        Log::debug(["notificacion" => $data]);
         $new_order = null;
         if($data["topic"] == "orders_v2"){
 
@@ -41,18 +42,31 @@ class MercadoLibreController extends Controller
 
                     if($response_json['status'] == "cancelled"){
                         $this->delete_order($user_id, $resource);
+                
+                        return response()->json(["message" => "Pedido guardado exitosamente.", "order" => $new_order, 200]);
                     }
 
                     $url_bi = "$url/billing_info";
                     $response_billing_info = Http::withHeaders(['Authorization' => 'Bearer ' . $access_token])->get($url_bi);   
                     
                     $billing_info = $response_billing_info->json();
+                    Log::debug(["billing_info" => $billing_info]);
                     if(!$order){
-                        // if($response_json['status'] != "cancelled"){
+                        if($response_json['status'] != "cancelled"){
                             $new_order = $this->new_order($user_id, $resource, $response_json, $billing_info);
-                        // }
+                        }
                     }else{
                         $order->data = $response_json;
+                        
+                        if($order->document_type != null)
+                            $order->document_type = $billing_info['billing_info']['doc_type'] ?? null;
+                        
+                        if($order->document != null)
+                            $order->document = $billing_info['billing_info']['doc_number'] ?? null;
+                        
+                        if($order->billing_info != null)
+                            $order->billing_info = $billing_info ?? null;
+
                         $order->save();
 
                         $order_detail = OrderDetail::where('order_id', $order->id)->first();
@@ -64,7 +78,7 @@ class MercadoLibreController extends Controller
                         $order_detail->save();
                     }
 
-                    // $this->clean_records_orders($resource);
+                    $this->clean_records_orders($resource);
 
                 } catch (\Exception $e) {
                     Log::debug(["message" => "Error al registrar pedido", "error" => $e->getMessage(), $e->getLine()]);
@@ -78,7 +92,7 @@ class MercadoLibreController extends Controller
 
     public function delete_order($user_id, $resource)
     {
-        $orders = Order::where("user_id", $user_id)->where("resource", $resource);
+        $orders = Order::where("user_id", $user_id)->where("resource", $resource)->get();
         foreach ($orders as $order) {
             $order_details = OrderDetail::where('order_id', $order->id)->get();
             foreach($order_details as $order_detail){
